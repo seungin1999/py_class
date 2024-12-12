@@ -1,7 +1,7 @@
 import crl_utils
 import utils
 
-import time
+import time, os
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -17,8 +17,12 @@ from tqdm import tqdm
 #     )
 
 def rank_reg(output, target):
-    ranks = []
+    ranks = {}
     target_copy = target.cpu()
+    loss = 0
+
+    for cls in list(set(target_copy)):
+        ranks[cls.item()] = []
 
     tgt_idx = [(i, target_copy[i]) for i in range(len(target_copy))]# gets the indices of the target classification in the form of [[i,j],[i,l]] where j and l are the positions of the targets
     # Use the above score to pinpoint True positives in the batch score matrix
@@ -32,19 +36,25 @@ def rank_reg(output, target):
     transposed_output = output_copy.T
     temp = (-transposed_output).argsort()
     ranked_output = temp.argsort().T
+
+    ranked_output
     # print(f"Ranked Output:\n{ranked_output}")
     # ranked_output = df.rank(0, ascending=False).astype(int).values
     for tgt in tgt_idx:
-        # print(ranked_output[target_copy])
-        ranks.append(ranked_output[tgt]**2)
+        # print(tgt[1].item())
+        ranks[tgt[1].item()].append(ranked_output[tgt]**2)
+
+    for cls in ranks:
+        avg_rank = sum(ranks[cls])/len(ranks[cls])
+        # print(avg_rank, len(ranks[cls]), avg_rank/(len(ranks[cls])**2))
+        loss += avg_rank/(len(ranks[cls])**2)
+    # print(ranks)
 
     # print(f"\n\nRanks:\n{ranks}")
-    loss = sum(ranks)/len(ranks)
-    # print(loss)
-
+    loss = torch.tensor(loss)
     return loss
 
-def train(loader, model, criterion_cls, criterion_ranking, optimizer, epoch, history, logger, rank, args, val_loader):
+def train(loader, model, criterion_cls, criterion_ranking, optimizer, epoch, history, logger, rank, args, val_loader, save_path, lowest_loss):
     batch_time = utils.AverageMeter()
     data_time = utils.AverageMeter()
     total_losses = utils.AverageMeter()
@@ -203,3 +213,10 @@ def train(loader, model, criterion_cls, criterion_ranking, optimizer, epoch, his
         
         print(f"\nAverage Validation Loss: {total_loss/len(val_loader)}\n")
         logger.write([epoch, total_losses.avg, cls_losses.avg, ranking_losses.avg, top1.avg, float(total_loss/len(val_loader))])
+
+        if total_loss/len(val_loader) < lowest_loss:
+            torch.save(model.state_dict(),
+                     os.path.join(save_path, f'best_model.pth'))
+            lowest_loss = total_loss/len(val_loader)
+
+    return lowest_loss
